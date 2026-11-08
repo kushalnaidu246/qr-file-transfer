@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FileDrop</title>
+<style>
+  :root {
+    --bg:#f4f5fb; --card:#ffffff; --fg:#161a2b; --muted:#6c7391; --line:#e8eaf4;
+    --a1:#6366f1; --a2:#8b5cf6; --ok:#10b981; --warn:#f59e0b; --danger:#ef4444;
+    --shadow:0 8px 30px rgba(60,64,120,.10); --chip:#eef0ff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0e1020; --card:#181b31; --fg:#eceefb; --muted:#9097b8; --line:#272b49;
+            --shadow:0 8px 30px rgba(0,0,0,.35); --chip:#232750; }
+  }
+  * { box-sizing:border-box; -webkit-user-select:none; user-select:none; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  .wrap { max-width:520px; margin:0 auto; padding:20px 18px 28px; }
+  header { display:flex; align-items:center; gap:10px; margin-bottom:18px; }
+  .logo { width:36px; height:36px; border-radius:11px; display:grid; place-items:center;
+          background:linear-gradient(135deg,var(--a1),var(--a2)); color:#fff;
+          box-shadow:0 6px 16px rgba(99,102,241,.4); }
+  header h1 { font-size:21px; margin:0; letter-spacing:-.3px; }
+  .pairbtn { margin-left:auto; padding:6px 12px; font-size:12.5px; background:var(--chip); color:var(--a1); }
+  .pairbtn + .badge { margin-left:8px; }
+  .badge { margin-left:auto; display:flex; align-items:center; gap:7px; font-size:13px; font-weight:600;
+           padding:6px 12px; border-radius:99px; background:var(--chip); color:var(--muted); }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--warn); }
+  .badge.on { color:var(--ok); background:rgba(16,185,129,.12); }
+  .badge.on .dot { background:var(--ok); box-shadow:0 0 0 4px rgba(16,185,129,.2); }
+  .card { background:var(--card); border-radius:20px; padding:20px; margin-bottom:16px; box-shadow:var(--shadow); }
+  .qrcard { text-align:center; }
+  .qrcard h2 { margin:0 0 4px; font-size:18px; }
+  .qrcard p { margin:0 0 16px; color:var(--muted); font-size:14px; }
+  #qr { width:210px; height:210px; padding:12px; background:#fff; border-radius:16px; margin:0 auto;
+        box-shadow:0 0 0 1px var(--line), 0 10px 24px rgba(99,102,241,.18); }
+  #qr svg { width:100%; height:100%; display:block; }
+  .pinlbl { margin-top:16px; font-size:13px; color:var(--muted); }
+  .pin { font:800 34px/1.2 ui-monospace,Menlo,monospace; letter-spacing:10px; padding-left:10px; color:var(--a1); }
+  .url { margin-top:14px; font-size:12px; color:var(--muted); word-break:break-all; }
+  .sec { display:flex; align-items:center; justify-content:space-between; margin:4px 2px 10px; }
+  .sec h3 { margin:0; font-size:13px; text-transform:uppercase; letter-spacing:.8px; color:var(--muted); }
+  .count { background:var(--chip); color:var(--a1); font-weight:700; font-size:12px; padding:2px 9px; border-radius:99px; }
+  .row { display:flex; align-items:center; gap:12px; padding:12px; border-radius:14px; background:var(--card);
+         box-shadow:var(--shadow); margin-bottom:10px; animation:pop .35s ease; }
+  .row.new { box-shadow:0 0 0 2px var(--a1), var(--shadow); }
+  @keyframes pop { from { transform:translateY(8px); opacity:0 } to { transform:none; opacity:1 } }
+  .ico { flex:none; width:42px; height:42px; border-radius:12px; display:grid; place-items:center;
+         font-size:11px; font-weight:800; color:#fff; letter-spacing:.3px; }
+  .meta { flex:1; min-width:0; }
+  .name { font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .size { font-size:12.5px; color:var(--muted); }
+  button { font:inherit; border:0; cursor:pointer; border-radius:11px; padding:9px 14px; font-weight:600;
+           transition:transform .1s, opacity .15s; }
+  button:active { transform:scale(.96); }
+  .primary { color:#fff; background:linear-gradient(135deg,var(--a1),var(--a2)); box-shadow:0 6px 14px rgba(99,102,241,.35); }
+  .ghost { background:transparent; color:var(--muted); padding:8px 10px; }
+  .ghost:hover { color:var(--danger); }
+  .wide { width:100%; padding:13px; font-size:15px; }
+  .soft { background:var(--chip); color:var(--a1); }
+  .fin { width:100%; margin-bottom:10px; padding:12px 14px; border-radius:12px; border:2px solid var(--line); background:var(--card); color:var(--fg); font:inherit; font-size:14px; outline:none; -webkit-user-select:text; user-select:text; }
+  .fin:focus { border-color:var(--a1); }
+  .dz { border:2px dashed var(--a1); background:var(--chip); border-radius:16px; text-align:center; padding:22px 12px; margin-bottom:10px; color:var(--a1); transition:.15s; }
+  .dz b { display:block; font-size:15px; } .dz span { font-size:12.5px; color:var(--muted); }
+  body.dragging .dz { background:rgba(99,102,241,.28); transform:scale(1.02); border-style:solid; }
+  .empty { text-align:center; color:var(--muted); font-size:14px; padding:18px 10px;
+           border:2px dashed var(--line); border-radius:14px; margin-bottom:10px; }
+  .foot { text-align:center; margin-top:6px; }
+  #banner { display:none; margin-bottom:16px; padding:14px 16px; border-radius:16px; color:#fff;
+            background:linear-gradient(135deg,var(--a1),var(--a2)); box-shadow:0 10px 24px rgba(99,102,241,.4);
+            align-items:center; gap:12px; animation:pop .35s ease; }
+  #banner.show { display:flex; }
+  #banner .t { flex:1; min-width:0; }
+  #banner b { display:block; }
+  #banner span { font-size:13px; opacity:.9; display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #banner button { background:#fff; color:var(--a1); }
+
+  #fab { position:fixed; right:18px; bottom:18px; width:56px; height:56px; border-radius:50%; border:0; cursor:pointer; display:none;
+         place-items:center; color:#fff; background:linear-gradient(135deg,var(--a1),var(--a2)); box-shadow:0 10px 24px rgba(99,102,241,.5); z-index:20; padding:0; }
+  #fab.show { display:grid; }
+  #fab b { position:absolute; top:-4px; right:-4px; min-width:22px; height:22px; padding:0 6px; border-radius:99px; background:#ef4444; color:#fff;
+           font:700 12px/22px system-ui; text-align:center; display:none; }
+  #chat { position:fixed; left:0; right:0; bottom:0; margin:0 auto; max-width:520px; height:72vh; z-index:30; display:none; flex-direction:column;
+          background:var(--card); border-radius:24px 24px 0 0; box-shadow:0 -12px 40px rgba(0,0,0,.28); }
+  #chat.open { display:flex; animation:up .25s ease; }
+  @keyframes up { from { transform:translateY(40px); opacity:0 } to { transform:none; opacity:1 } }
+  #chat .hd { display:flex; align-items:center; padding:16px 18px; font-weight:700; font-size:16px; border-bottom:1px solid var(--line); }
+  #chat .hd button { margin-left:auto; background:var(--chip); color:var(--muted); border:0; width:32px; height:32px; border-radius:50%; cursor:pointer; font-size:15px; }
+  #msgs { flex:1; overflow-y:auto; padding:14px 16px; display:flex; flex-direction:column; gap:8px; -webkit-user-select:text; user-select:text; }
+  .m, .m * { -webkit-user-select:text; user-select:text; cursor:text; }
+  .m { max-width:80%; padding:9px 13px; border-radius:18px; word-wrap:break-word; white-space:pre-wrap; font-size:15px; line-height:1.35; }
+  .m.me { align-self:flex-end; color:#fff; background:linear-gradient(135deg,var(--a1),var(--a2)); border-bottom-right-radius:6px; }
+  .m.them { align-self:flex-start; background:var(--chip); color:var(--fg); border-bottom-left-radius:6px; }
+  .m .cp { float:right; margin:2px 0 0 10px; border:0; background:rgba(127,127,127,.25); color:inherit; border-radius:8px; font:600 11px system-ui; padding:3px 8px; cursor:pointer; opacity:.85; }
+  .m small { display:block; opacity:.65; font-size:11px; margin-top:3px; }
+  .cnone { margin:auto; color:var(--muted); text-align:center; font-size:14px; }
+  #chat form { display:flex; gap:8px; padding:12px 14px calc(12px + env(safe-area-inset-bottom)); border-top:1px solid var(--line); }
+  #chat textarea { flex:1; resize:none; max-height:120px; line-height:1.35; min-width:0; padding:12px 14px; border-radius:99px; border:2px solid var(--line); background:var(--bg); color:var(--fg); font:inherit; outline:none; -webkit-user-select:text; user-select:text; }
+  #chat textarea:focus { border-color:var(--a1); }
+  #chat form button { border:0; border-radius:99px; padding:0 18px; font:700 15px system-ui; color:#fff; cursor:pointer; background:linear-gradient(135deg,var(--a1),var(--a2)); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="logo"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h11l-3-3M17 17H6l3 3"/></svg></div>
+    <h1>FileDrop</h1>
+    <button class="pairbtn" id="pairbtn" style="display:none"></button>
+    <div class="badge" id="badge"><span class="dot"></span><span id="bt">Waiting for phone</span></div>
+  </header>
+
+  <div id="banner">
+    <div class="t"><b>New file from your phone</b><span id="bname"></span></div>
+    <button id="bsave">Save to…</button>
+  </div>
+
+  <div class="card qrcard" id="qrcard">
+    <h2>Scan to connect</h2>
+    <p>Open your phone camera and point it at the code.<br>Phone and PC must be on the same Wi-Fi.</p>
+    <div id="qr"></div>
+    <div class="pinlbl">Then enter this PIN on your phone</div>
+    <div class="pin" id="pin">····</div>
+    <div class="url" id="url"></div>
+  </div>
+
+  <div class="sec"><h3>Received from phone</h3><span class="count" id="ci">0</span></div>
+  <div id="inbox"></div>
+
+  <div class="sec" style="margin-top:20px"><h3>Send to phone</h3><span class="count" id="co">0</span></div>
+  <input id="folder" class="fin" placeholder="📁 Folder name (optional) — phone gets a .zip with this name" maxlength="60">
+  <div class="dz" id="dz"><b>⬇ Drag &amp; drop files or a folder here</b><span>from Finder — or use the button below</span></div>
+  <button class="primary wide" id="pick" style="margin-bottom:12px">＋ Choose files to send</button>
+  <div id="outbox"></div>
+
+  <div class="foot"><button class="ghost" id="open">📂 Open FileDrop folder</button></div>
+</div>
+
+<button id="fab" aria-label="Chat"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg><b id="fabn"></b></button>
+<div id="chat"><div class="hd">💬 Chat<button id="cx" aria-label="Close">✕</button></div><div id="msgs"></div>
+<form id="cf"><textarea id="ci2" rows="1" placeholder="Type a message…" maxlength="5000"></textarea><button>Send</button></form></div>
+<script>
+(function () {
+  const BASE = "/desktop/chat", ME = "pc";
+  const fab = document.getElementById("fab"), chat = document.getElementById("chat"), box = document.getElementById("msgs"), badge = document.getElementById("fabn");
+  let last = 0, unread = 0, visible = false, empty = true;
+  const hm = t => new Date(t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  function add(m) {
+    if (empty) { box.textContent = ""; empty = false; }
+    const d = document.createElement("div"); d.className = "m " + (m.from === ME ? "me" : "them");
+    const body = document.createElement("span"); body.textContent = m.text; d.append(body);
+    const cp = document.createElement("button"); cp.className = "cp"; cp.type = "button"; cp.textContent = "Copy";
+    cp.onclick = () => copyText(m.text).then(() => { cp.textContent = "Copied ✓"; setTimeout(() => cp.textContent = "Copy", 1200); });
+    const s = document.createElement("small"); s.textContent = hm(m.ts); s.append(cp); d.append(s); box.append(d);
+  }
+  async function copyText(text) {
+    try { if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); return; } } catch (e) {}
+    const ta = document.createElement("textarea"); ta.value = text; ta.style.cssText = "position:fixed;opacity:0";
+    document.body.append(ta); ta.select(); try { document.execCommand("copy"); } catch (e) {} ta.remove();
+  }
+  function none() { box.innerHTML = '<div class="cnone">No messages yet.<br>Say hi 👋</div>'; }
+  none();
+  async function poll() {
+    if (!visible) return;
+    let r; try { r = await fetch(BASE + "?since=" + last); } catch (e) { return; }
+    if (!r.ok) return;
+    const ms = await r.json(); if (!ms.length) return;
+    const stick = box.scrollTop + box.clientHeight >= box.scrollHeight - 40;
+    ms.forEach(m => { add(m); last = m.id; if (m.from !== ME && !chat.classList.contains("open")) unread++; });
+    if (stick || chat.classList.contains("open")) box.scrollTop = box.scrollHeight;
+    badge.textContent = unread > 9 ? "9+" : unread; badge.style.display = unread ? "block" : "none";
+  }
+  fab.onclick = () => { fab.style.visibility = "hidden"; chat.classList.add("open"); unread = 0; badge.style.display = "none"; box.scrollTop = box.scrollHeight; document.getElementById("ci2").focus(); };
+  document.getElementById("cx").onclick = () => { chat.classList.remove("open"); fab.style.visibility = ""; };
+  document.getElementById("cf").onsubmit = async e => {
+    e.preventDefault(); const i = document.getElementById("ci2"), t = i.value.replace(/\s+$/, ""); if (!t.trim()) return; i.value = ""; i.style.height = "";
+    await fetch(BASE, { method: "POST", body: t }); await poll(); box.scrollTop = box.scrollHeight;
+  };
+  const ta2 = document.getElementById("ci2");
+  ta2.addEventListener("input", () => { ta2.style.height = "auto"; ta2.style.height = Math.min(ta2.scrollHeight, 120) + "px"; });
+  ta2.addEventListener("keydown", e => { if (ME === "pc" && e.key === "Enter" && !e.shiftKey) { e.preventDefault(); document.getElementById("cf").requestSubmit(); } });
+  window.setChatVisible = v => { visible = v; fab.classList.toggle("show", v); if (!v) { chat.classList.remove("open"); fab.style.visibility = ""; } };
+  setInterval(poll, 1500);
+})();
+</script>
+<script>
+const shownRows = new Set();
+const $ = id => document.getElementById(id);
+const api = () => window.pywebview && window.pywebview.api;
+const fmt = n => n < 1024 ? n + " B" : n < 1048576 ? (n/1024).toFixed(1) + " KB"
+  : n < 1073741824 ? (n/1048576).toFixed(1) + " MB" : (n/1073741824).toFixed(2) + " GB";
+const COLORS = { IMG:"#ec4899", VID:"#f97316", AUD:"#06b6d4", DOC:"#3b82f6", ZIP:"#eab308", APK:"#22c55e", DIR:"#6366f1", FILE:"#8b5cf6" };
+function kind(n) {
+  const e = (n.split(".").pop() || "").toLowerCase();
+  if (["jpg","jpeg","png","gif","webp","heic","bmp"].includes(e)) return "IMG";
+  if (["mp4","mov","mkv","avi","webm","3gp"].includes(e)) return "VID";
+  if (["mp3","wav","m4a","aac","flac","ogg"].includes(e)) return "AUD";
+  if (["pdf","doc","docx","xls","xlsx","ppt","pptx","txt","csv"].includes(e)) return "DOC";
+  if (["zip","rar","7z","tar","gz"].includes(e)) return "ZIP";
+  if (e === "apk") return "APK";
+  return "FILE";
+}
+// item: {name,size} for a file, or {name,size,files:[...]} for a folder group
+function row(it, actions, isNew, key) {
+  const d = document.createElement("div"); d.className = "row" + (isNew ? " new" : "");
+  if (shownRows.has(key)) d.style.animation = "none"; shownRows.add(key);
+  const isDir = !!it.files, k = isDir ? "DIR" : kind(it.name);
+  const i = document.createElement("div"); i.className = "ico"; i.style.background = COLORS[k]; i.textContent = isDir ? "📁" : k;
+  if (isDir) i.style.fontSize = "20px";
+  const m = document.createElement("div"); m.className = "meta";
+  const n = document.createElement("div"); n.className = "name"; n.textContent = it.name;
+  const s = document.createElement("div"); s.className = "size";
+  s.textContent = isDir ? `${it.files.length} file${it.files.length > 1 ? "s" : ""} · ${fmt(it.size)}` : fmt(it.size);
+  m.append(n, s); d.append(i, m, ...actions); return d;
+}
+function btn(label, cls, fn) { const b = document.createElement("button"); b.className = cls; b.textContent = label; b.onclick = fn; return b; }
+
+function drawQR(m) {
+  const n = m.length; let p = "";
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) if (m[y][x]) p += `M${x} ${y}h1v1h-1z`;
+  $("qr").innerHTML = `<svg viewBox="0 0 ${n} ${n}" shape-rendering="crispEdges"><path d="${p}" fill="#161a2b"/></svg>`;
+}
+
+let showQR = false, qrDrawn = false, known = null, fresh = new Set();
+async function save(name, folder) { if (api()) { await api().save(name, folder || null); tick(); } else alert("Open the FileDrop app to save files."); }
+const items = t => [...t.folders.map(f => ({ ...f, dir: true })), ...t.files];
+const keyOf = it => (it.files ? "d:" : "f:") + it.name;
+
+async function tick() {
+  let d; try { d = await (await fetch("/desktop/info")).json(); } catch (e) { return; }
+  if (!qrDrawn) { drawQR(d.qr); $("url").textContent = d.url.split("?")[0]; qrDrawn = true; }
+  $("pin").textContent = d.pin;
+  const on = d.connected.length > 0;
+  $("badge").className = "badge" + (on ? " on" : ""); $("bt").textContent = on ? "Phone connected" : "Waiting for phone";
+  showQR = showQR && on;  // phone dropped off: QR comes back on its own
+  $("qrcard").style.display = (!on || showQR) ? "block" : "none";
+  $("pairbtn").style.display = on ? "inline-block" : "none";
+  $("pairbtn").textContent = showQR ? "Hide QR" : "＋ Pair phone";
+  window.setChatVisible && setChatVisible(on);
+
+  const inItems = items(d.inbox), keys = inItems.map(keyOf);
+  const newOnes = known === null ? [] : inItems.filter(it => !known.has(keyOf(it)));
+  known = new Set(keys);
+  newOnes.forEach(it => fresh.add(keyOf(it)));
+  const first = newOnes[0];
+  if (first) {
+    $("bname").textContent = first.files ? "📁 " + first.name : first.name;
+    $("bsave").onclick = () => first.files ? save(null, first.name) : save(first.name);
+    $("banner").classList.add("show");
+  }
+  if (!keys.length) $("banner").classList.remove("show");
+
+  const sig = JSON.stringify([d.inbox, d.outbox]);
+  if (sig === window._sig) return;  // nothing changed: don't redraw (avoids flicker)
+  window._sig = sig;
+  const outItems = items(d.outbox);
+  $("ci").textContent = inItems.length; $("co").textContent = outItems.length;
+
+  const ib = $("inbox"); ib.textContent = "";
+  if (!inItems.length) ib.innerHTML = '<div class="empty">Files you send from your phone appear here</div>';
+  inItems.forEach(it => {
+    const dir = !!it.files;
+    ib.append(row(it, [
+      btn(dir ? "Save folder…" : "Save to…", "primary", () => dir ? save(null, it.name) : save(it.name)),
+      btn("✕", "ghost", async () => { if (api()) { await (dir ? api().discard(null, it.name) : api().discard(it.name)); tick(); } })],
+      fresh.has(keyOf(it)), keyOf(it)));
+  });
+  const ob = $("outbox"); ob.textContent = "";
+  if (!outItems.length) ob.innerHTML = '<div class="empty">Chosen files show up on your phone to download</div>';
+  outItems.forEach(it => {
+    const dir = !!it.files;
+    ob.append(row(it, [btn("✕", "ghost", async () => { if (api()) { await (dir ? api().remove_outgoing(null, it.name) : api().remove_outgoing(it.name)); tick(); } })], false, "o" + keyOf(it)));
+  });
+}
+$("pick").onclick = async () => { if (api()) { await api().send_files($("folder").value.trim() || null); tick(); } };
+$("pairbtn").onclick = () => { showQR = !showQR; tick(); };
+$("open").onclick = () => api() && api().open_folder();
+let dragN = 0;  // highlight the drop zone while a file is dragged over the window
+addEventListener("dragenter", () => { dragN++; document.body.classList.add("dragging"); });
+addEventListener("dragleave", () => { if (--dragN <= 0) { dragN = 0; document.body.classList.remove("dragging"); } });
+addEventListener("drop", () => { dragN = 0; document.body.classList.remove("dragging"); });
+addEventListener("dragover", e => e.preventDefault());
+tick(); setInterval(tick, 1500);
+</script>
+</body>
+</html>

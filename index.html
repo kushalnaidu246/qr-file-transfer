@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#6366f1">
+<title>FileDrop</title>
+<style>
+  :root {
+    --bg:#f4f5fb; --card:#fff; --fg:#161a2b; --muted:#6c7391; --line:#e8eaf4;
+    --a1:#6366f1; --a2:#8b5cf6; --ok:#10b981; --danger:#ef4444;
+    --shadow:0 8px 30px rgba(60,64,120,.10); --chip:#eef0ff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0e1020; --card:#181b31; --fg:#eceefb; --muted:#9097b8; --line:#272b49;
+            --shadow:0 8px 30px rgba(0,0,0,.35); --chip:#232750; }
+  }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:16px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  .hero { padding:calc(env(safe-area-inset-top) + 22px) 20px 70px; color:#fff;
+          background:linear-gradient(135deg,var(--a1),var(--a2)); border-radius:0 0 30px 30px; }
+  .hero .top { display:flex; align-items:center; gap:10px; }
+  .logo { width:38px; height:38px; border-radius:12px; display:grid; place-items:center; background:rgba(255,255,255,.2); }
+  .hero h1 { margin:0; font-size:22px; letter-spacing:-.3px; }
+  .live { margin-left:auto; display:flex; align-items:center; gap:7px; font-size:13px; font-weight:600;
+          background:rgba(255,255,255,.18); padding:6px 12px; border-radius:99px; }
+  .live i { width:8px; height:8px; border-radius:50%; background:#6ee7b7; box-shadow:0 0 0 4px rgba(110,231,183,.3); }
+  .hero p { margin:14px 0 0; opacity:.9; font-size:14px; }
+  main { max-width:560px; margin:-34px auto 0; padding:0 16px 40px; }
+  .card { background:var(--card); border-radius:22px; padding:16px; box-shadow:var(--shadow); margin-bottom:16px; }
+  .tabs { display:flex; background:var(--chip); border-radius:14px; padding:4px; margin-bottom:16px; }
+  .tabs button { flex:1; border:0; background:transparent; padding:11px; border-radius:11px; font:inherit;
+                 font-weight:700; color:var(--muted); cursor:pointer; }
+  .tabs button.on { background:var(--card); color:var(--a1); box-shadow:0 3px 10px rgba(60,64,120,.12); }
+  .pane { display:none; } .pane.on { display:block; }
+  .fin { width:100%; margin-bottom:12px; padding:13px 14px; border-radius:14px; border:2px solid var(--line); background:var(--bg);
+         color:var(--fg); font:inherit; outline:none; }
+  .fin:focus { border-color:var(--a1); }
+  .grp { border:1px solid var(--line); border-radius:16px; padding:6px 12px; margin:10px 0; }
+  .grp .sub { padding-left:4px; }
+  .grp .row { padding:9px 0; }
+  #drop { border:2px dashed var(--a1); border-radius:18px; text-align:center; padding:34px 14px; cursor:pointer;
+          background:var(--chip); color:var(--a1); }
+  #drop.over { background:rgba(99,102,241,.2); }
+  #drop .big { width:56px; height:56px; margin:0 auto 10px; border-radius:18px; display:grid; place-items:center; color:#fff;
+               background:linear-gradient(135deg,var(--a1),var(--a2)); box-shadow:0 8px 18px rgba(99,102,241,.4); }
+  #drop b { display:block; font-size:17px; color:var(--fg); }
+  #drop small { color:var(--muted); }
+  .row { display:flex; align-items:center; gap:12px; padding:12px 0; border-top:1px solid var(--line); }
+  .row:first-child { border-top:0; }
+  .ico { flex:none; width:42px; height:42px; border-radius:12px; display:grid; place-items:center;
+         font-size:11px; font-weight:800; color:#fff; }
+  .meta { flex:1; min-width:0; }
+  .name { font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .size { font-size:13px; color:var(--muted); }
+  .bar { height:6px; border-radius:99px; background:var(--chip); margin-top:6px; overflow:hidden; }
+  .bar i { display:block; height:100%; width:0; background:linear-gradient(90deg,var(--a1),var(--a2)); transition:width .15s; }
+  .dl { flex:none; text-decoration:none; color:#fff; font-weight:700; font-size:14px; padding:9px 14px; border-radius:11px;
+        background:linear-gradient(135deg,var(--a1),var(--a2)); box-shadow:0 6px 14px rgba(99,102,241,.35); }
+  .done { color:var(--ok); font-weight:700; font-size:14px; }
+  .fail { color:var(--danger); font-weight:700; font-size:14px; }
+  .empty { text-align:center; color:var(--muted); padding:22px 8px; }
+  #lock { display:none; text-align:center; padding:34px 20px; }
+  #pin { width:100%; font:800 30px ui-monospace,Menlo,monospace; letter-spacing:10px; text-align:center; padding:12px; border-radius:14px;
+         border:2px solid var(--line); background:var(--bg); color:var(--fg); outline:none; }
+  #pin:focus { border-color:var(--a1); }
+  #go { width:100%; margin-top:12px; border:0; padding:14px; border-radius:14px; font:700 16px inherit; font-family:inherit; color:#fff;
+        background:linear-gradient(135deg,var(--a1),var(--a2)); }
+  #lock h2 { margin:0 0 6px; }
+  #lock p { color:var(--muted); margin:0; }
+
+  #fab { position:fixed; right:18px; bottom:18px; width:56px; height:56px; border-radius:50%; border:0; cursor:pointer; display:none;
+         place-items:center; color:#fff; background:linear-gradient(135deg,var(--a1),var(--a2)); box-shadow:0 10px 24px rgba(99,102,241,.5); z-index:20; padding:0; }
+  #fab.show { display:grid; }
+  #fab b { position:absolute; top:-4px; right:-4px; min-width:22px; height:22px; padding:0 6px; border-radius:99px; background:#ef4444; color:#fff;
+           font:700 12px/22px system-ui; text-align:center; display:none; }
+  #chat { position:fixed; left:0; right:0; bottom:0; margin:0 auto; max-width:520px; height:72vh; z-index:30; display:none; flex-direction:column;
+          background:var(--card); border-radius:24px 24px 0 0; box-shadow:0 -12px 40px rgba(0,0,0,.28); }
+  #chat.open { display:flex; animation:up .25s ease; }
+  @keyframes up { from { transform:translateY(40px); opacity:0 } to { transform:none; opacity:1 } }
+  #chat .hd { display:flex; align-items:center; padding:16px 18px; font-weight:700; font-size:16px; border-bottom:1px solid var(--line); }
+  #chat .hd button { margin-left:auto; background:var(--chip); color:var(--muted); border:0; width:32px; height:32px; border-radius:50%; cursor:pointer; font-size:15px; }
+  #msgs { flex:1; overflow-y:auto; padding:14px 16px; display:flex; flex-direction:column; gap:8px; -webkit-user-select:text; user-select:text; }
+  .m, .m * { -webkit-user-select:text; user-select:text; cursor:text; }
+  .m { max-width:80%; padding:9px 13px; border-radius:18px; word-wrap:break-word; white-space:pre-wrap; font-size:15px; line-height:1.35; }
+  .m.me { align-self:flex-end; color:#fff; background:linear-gradient(135deg,var(--a1),var(--a2)); border-bottom-right-radius:6px; }
+  .m.them { align-self:flex-start; background:var(--chip); color:var(--fg); border-bottom-left-radius:6px; }
+  .m .cp { float:right; margin:2px 0 0 10px; border:0; background:rgba(127,127,127,.25); color:inherit; border-radius:8px; font:600 11px system-ui; padding:3px 8px; cursor:pointer; opacity:.85; }
+  .m small { display:block; opacity:.65; font-size:11px; margin-top:3px; }
+  .cnone { margin:auto; color:var(--muted); text-align:center; font-size:14px; }
+  #chat form { display:flex; gap:8px; padding:12px 14px calc(12px + env(safe-area-inset-bottom)); border-top:1px solid var(--line); }
+  #chat textarea { flex:1; resize:none; max-height:120px; line-height:1.35; min-width:0; padding:12px 14px; border-radius:99px; border:2px solid var(--line); background:var(--bg); color:var(--fg); font:inherit; outline:none; -webkit-user-select:text; user-select:text; }
+  #chat textarea:focus { border-color:var(--a1); }
+  #chat form button { border:0; border-radius:99px; padding:0 18px; font:700 15px system-ui; color:#fff; cursor:pointer; background:linear-gradient(135deg,var(--a1),var(--a2)); }
+</style>
+</head>
+<body>
+<div class="hero">
+  <div class="top">
+    <div class="logo"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M7 7h11l-3-3M17 17H6l3 3"/></svg></div>
+    <h1>FileDrop</h1>
+    <div class="live" id="live"><i></i>Connected</div>
+  </div>
+  <p>Send files to your PC and grab files from it, instantly.</p>
+</div>
+
+<main>
+  <div class="card" id="lock">
+    <div style="font-size:42px">📷</div>
+    <h2 id="lt">Not connected</h2>
+    <p id="lp">Scan the QR code shown in the FileDrop app on your PC.</p>
+    <div id="pinbox" style="display:none;margin-top:18px">
+      <input id="pin" inputmode="numeric" maxlength="4" placeholder="····" autocomplete="off">
+      <button id="go">Connect</button>
+      <p id="err" style="color:var(--danger);margin-top:10px"></p>
+    </div>
+  </div>
+
+  <div id="app">
+    <div class="tabs">
+      <button class="on" data-t="send">⬆ Send to PC</button>
+      <button data-t="get">⬇ From PC <span id="badge"></span></button>
+    </div>
+
+    <div class="pane on card" id="send">
+      <input id="folder" class="fin" placeholder="📁 Folder name (optional)" maxlength="60" autocomplete="off">
+      <div id="drop">
+        <div class="big"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 16V4M7 9l5-5 5 5M5 20h14"/></svg></div>
+        <b>Tap to choose files</b>
+        <small>Photos, videos, documents — anything</small>
+      </div>
+      <input type="file" id="picker" multiple hidden>
+      <div id="uploads" style="margin-top:6px"></div>
+    </div>
+
+    <div class="pane card" id="get">
+      <div id="list"></div>
+    </div>
+  </div>
+</main>
+
+<button id="fab" aria-label="Chat"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg><b id="fabn"></b></button>
+<div id="chat"><div class="hd">💬 Chat<button id="cx" aria-label="Close">✕</button></div><div id="msgs"></div>
+<form id="cf"><textarea id="ci2" rows="1" placeholder="Type a message…" maxlength="5000"></textarea><button>Send</button></form></div>
+<script>
+(function () {
+  const BASE = "/chat", ME = "phone";
+  const fab = document.getElementById("fab"), chat = document.getElementById("chat"), box = document.getElementById("msgs"), badge = document.getElementById("fabn");
+  let last = 0, unread = 0, visible = false, empty = true;
+  const hm = t => new Date(t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  function add(m) {
+    if (empty) { box.textContent = ""; empty = false; }
+    const d = document.createElement("div"); d.className = "m " + (m.from === ME ? "me" : "them");
+    const body = document.createElement("span"); body.textContent = m.text; d.append(body);
+    const cp = document.createElement("button"); cp.className = "cp"; cp.type = "button"; cp.textContent = "Copy";
+    cp.onclick = () => copyText(m.text).then(() => { cp.textContent = "Copied ✓"; setTimeout(() => cp.textContent = "Copy", 1200); });
+    const s = document.createElement("small"); s.textContent = hm(m.ts); s.append(cp); d.append(s); box.append(d);
+  }
+  async function copyText(text) {
+    try { if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); return; } } catch (e) {}
+    const ta = document.createElement("textarea"); ta.value = text; ta.style.cssText = "position:fixed;opacity:0";
+    document.body.append(ta); ta.select(); try { document.execCommand("copy"); } catch (e) {} ta.remove();
+  }
+  function none() { box.innerHTML = '<div class="cnone">No messages yet.<br>Say hi 👋</div>'; }
+  none();
+  async function poll() {
+    if (!visible) return;
+    let r; try { r = await fetch(BASE + "?since=" + last); } catch (e) { return; }
+    if (!r.ok) return;
+    const ms = await r.json(); if (!ms.length) return;
+    const stick = box.scrollTop + box.clientHeight >= box.scrollHeight - 40;
+    ms.forEach(m => { add(m); last = m.id; if (m.from !== ME && !chat.classList.contains("open")) unread++; });
+    if (stick || chat.classList.contains("open")) box.scrollTop = box.scrollHeight;
+    badge.textContent = unread > 9 ? "9+" : unread; badge.style.display = unread ? "block" : "none";
+  }
+  fab.onclick = () => { fab.style.visibility = "hidden"; chat.classList.add("open"); unread = 0; badge.style.display = "none"; box.scrollTop = box.scrollHeight; document.getElementById("ci2").focus(); };
+  document.getElementById("cx").onclick = () => { chat.classList.remove("open"); fab.style.visibility = ""; };
+  document.getElementById("cf").onsubmit = async e => {
+    e.preventDefault(); const i = document.getElementById("ci2"), t = i.value.replace(/\s+$/, ""); if (!t.trim()) return; i.value = ""; i.style.height = "";
+    await fetch(BASE, { method: "POST", body: t }); await poll(); box.scrollTop = box.scrollHeight;
+  };
+  const ta2 = document.getElementById("ci2");
+  ta2.addEventListener("input", () => { ta2.style.height = "auto"; ta2.style.height = Math.min(ta2.scrollHeight, 120) + "px"; });
+  ta2.addEventListener("keydown", e => { if (ME === "pc" && e.key === "Enter" && !e.shiftKey) { e.preventDefault(); document.getElementById("cf").requestSubmit(); } });
+  window.setChatVisible = v => { visible = v; fab.classList.toggle("show", v); if (!v) { chat.classList.remove("open"); fab.style.visibility = ""; } };
+  setInterval(poll, 1500);
+})();
+</script>
+<script>
+const $ = id => document.getElementById(id);
+const fmt = n => n < 1024 ? n + " B" : n < 1048576 ? (n/1024).toFixed(1) + " KB"
+  : n < 1073741824 ? (n/1048576).toFixed(1) + " MB" : (n/1073741824).toFixed(2) + " GB";
+const COLORS = { IMG:"#ec4899", VID:"#f97316", AUD:"#06b6d4", DOC:"#3b82f6", ZIP:"#eab308", APK:"#22c55e", FILE:"#8b5cf6" };
+function kind(n) {
+  const e = (n.split(".").pop() || "").toLowerCase();
+  if (["jpg","jpeg","png","gif","webp","heic","bmp"].includes(e)) return "IMG";
+  if (["mp4","mov","mkv","avi","webm","3gp"].includes(e)) return "VID";
+  if (["mp3","wav","m4a","aac","flac","ogg"].includes(e)) return "AUD";
+  if (["pdf","doc","docx","xls","xlsx","ppt","pptx","txt","csv"].includes(e)) return "DOC";
+  if (["zip","rar","7z","tar","gz"].includes(e)) return "ZIP";
+  if (e === "apk") return "APK";
+  return "FILE";
+}
+function icon(name) { const k = kind(name), i = document.createElement("div"); i.className = "ico"; i.style.background = COLORS[k]; i.textContent = k; return i; }
+
+document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => {
+  document.querySelectorAll(".tabs button").forEach(x => x.classList.toggle("on", x === b));
+  document.querySelectorAll(".pane").forEach(p => p.classList.toggle("on", p.id === b.dataset.t));
+});
+
+async function load() {
+  let r;
+  try { r = await fetch("/api/files"); }
+  catch (e) { $("live").innerHTML = "<i style='background:#fca5a5;box-shadow:0 0 0 4px rgba(252,165,165,.3)'></i>PC not reachable"; return; }  // PC app closed / left Wi-Fi
+  $("live").innerHTML = "<i></i>Connected";
+  const ok = r.status !== 401;
+  if (!ok) {
+    const need = (await r.text()) === "pin";
+    $("pinbox").style.display = need ? "block" : "none";
+    $("lt").textContent = need ? "Enter PIN" : "Not connected";
+    $("lp").textContent = need ? "Type the 4-digit PIN shown on your PC." : "Session ended. Open the FileDrop app on your PC and scan its QR code to reconnect.";
+  }
+  $("lock").style.display = ok ? "none" : "block"; $("app").style.display = ok ? "block" : "none";
+  $("live").style.display = ok ? "flex" : "none";
+  window.setChatVisible && setChatVisible(ok);
+  if (!ok) return;
+  const { files, folders } = await r.json();
+  const total = files.length + folders.length;
+  $("badge").textContent = total ? "(" + total + ")" : "";
+  const ul = $("list"); ul.textContent = "";
+  if (!total) { ul.innerHTML = '<div class="empty">Nothing here yet.<br>Choose files in the FileDrop app on your PC and they appear here.</div>'; return; }
+  const fileRow = (f, folder) => {
+    const row = document.createElement("div"); row.className = "row";
+    const m = document.createElement("div"); m.className = "meta";
+    m.innerHTML = '<div class="name"></div><div class="size"></div>';
+    m.firstChild.textContent = f.name; m.lastChild.textContent = fmt(f.size);
+    const a = document.createElement("a"); a.className = "dl"; a.textContent = "Download";
+    a.href = "/files/" + encodeURIComponent(f.name) + (folder ? "?folder=" + encodeURIComponent(folder) : ""); a.download = f.name;
+    row.append(icon(f.name), m, a); return row;
+  };
+  for (const g of folders) {
+    const box = document.createElement("div"); box.className = "grp";
+    const head = document.createElement("div"); head.className = "row";
+    const ic = document.createElement("div"); ic.className = "ico"; ic.style.background = "#6366f1"; ic.style.fontSize = "20px"; ic.textContent = "📁";
+    const m = document.createElement("div"); m.className = "meta";
+    m.innerHTML = '<div class="name"></div><div class="size"></div>';
+    m.firstChild.textContent = g.name; m.lastChild.textContent = g.files.length + " files · " + fmt(g.size);
+    const z = document.createElement("a"); z.className = "dl"; z.textContent = "Download .zip"; z.href = "/zip/" + encodeURIComponent(g.name);
+    head.append(ic, m, z); box.append(head);
+    const sub = document.createElement("div"); sub.className = "sub";
+    g.files.forEach(f => sub.append(fileRow(f, g.name))); box.append(sub); ul.append(box);
+  }
+  files.forEach(f => ul.append(fileRow(f, "")));
+}
+
+function upload(file) {
+  const row = document.createElement("div"); row.className = "row";
+  const m = document.createElement("div"); m.className = "meta";
+  m.innerHTML = '<div class="name"></div><div class="size">Sending…</div><div class="bar"><i></i></div>';
+  m.firstChild.textContent = file.name;
+  const st = document.createElement("div"); st.textContent = "0%"; st.className = "size";
+  row.append(icon(file.name), m, st); $("uploads").prepend(row);
+  const bar = m.querySelector("i"), sub = m.querySelector(".size");
+  return new Promise(res => {
+    const x = new XMLHttpRequest();
+    const fo = $("folder").value.trim();
+    x.open("PUT", "/upload/" + encodeURIComponent(file.name) + (fo ? "?folder=" + encodeURIComponent(fo) : ""));
+    x.upload.onprogress = e => { if (e.lengthComputable) { const p = Math.round(e.loaded / e.total * 100); bar.style.width = p + "%"; st.textContent = p + "%"; } };
+    x.onload = () => { const ok = x.status === 201; bar.style.width = ok ? "100%" : "0"; sub.textContent = fmt(file.size);
+      st.className = ok ? "done" : "fail"; st.textContent = ok ? "✓ Sent" : "Failed"; res(); };
+    x.onerror = () => { st.className = "fail"; st.textContent = "Failed"; res(); };
+    x.send(file);
+  });
+}
+async function sendAll(files) { for (const f of files) await upload(f); }
+
+$("drop").onclick = () => $("picker").click();
+$("picker").onchange = e => { sendAll([...e.target.files]); e.target.value = ""; };
+$("drop").ondragover = e => { e.preventDefault(); $("drop").classList.add("over"); };
+$("drop").ondragleave = () => $("drop").classList.remove("over");
+$("drop").ondrop = e => { e.preventDefault(); $("drop").classList.remove("over"); sendAll([...e.dataTransfer.files]); };
+$("go").onclick = async () => {
+  const r = await fetch("/pair", { method: "POST", body: $("pin").value });
+  if (r.ok) { $("err").textContent = ""; load(); } else { $("err").textContent = await r.text(); $("pin").value = ""; }
+};
+load(); setInterval(load, 4000);
+</script>
+</body>
+</html>
