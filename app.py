@@ -77,8 +77,8 @@ class Api:
             return 0
         target = server.target_dir(server.STATE["outbox"], folder)
         for f in paths:
-            shutil.copy(f, server.unique_path(target, os.path.basename(f)))
-        return len(paths or [])
+            server.copy_in(f, target)
+        return len(paths)
 
     def remove_outgoing(self, name, folder=None):
         p = self._src(name, folder, "outbox")
@@ -102,7 +102,7 @@ def add_to_outbox(paths, folder):
         else:
             target, files = server.target_dir(out, folder), [p]
         for f in files:
-            shutil.copy(f, server.unique_path(target, os.path.basename(f)))
+            server.copy_in(f, target)
 
 
 def on_drop(event):
