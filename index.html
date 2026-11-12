@@ -58,6 +58,7 @@
   .bar i { display:block; height:100%; width:0; background:linear-gradient(90deg,var(--a1),var(--a2)); transition:width .15s; }
   .dl { flex:none; text-decoration:none; color:#fff; font-weight:700; font-size:14px; padding:9px 14px; border-radius:11px;
         background:linear-gradient(135deg,var(--a1),var(--a2)); box-shadow:0 6px 14px rgba(99,102,241,.35); }
+  .dl.wait { background:var(--chip); color:var(--muted); box-shadow:none; }
   .done { color:var(--ok); font-weight:700; font-size:14px; }
   .fail { color:var(--danger); font-weight:700; font-size:14px; }
   .empty { text-align:center; color:var(--muted); padding:22px 8px; }
@@ -246,7 +247,9 @@ async function load() {
     const m = document.createElement("div"); m.className = "meta";
     m.innerHTML = '<div class="name"></div><div class="size"></div>';
     m.firstChild.textContent = g.name; m.lastChild.textContent = g.files.length + " files · " + fmt(g.size);
-    const z = document.createElement("a"); z.className = "dl"; z.textContent = "Download .zip"; z.href = "/zip/" + encodeURIComponent(g.name);
+    const z = document.createElement(g.busy ? "span" : "a"); z.className = "dl" + (g.busy ? " wait" : "");
+    if (g.busy) z.textContent = "Copying…";  // PC is still adding files to this folder
+    else { z.textContent = "Download .zip"; z.href = "/zip/" + encodeURIComponent(g.name); }
     head.append(ic, m, z); box.append(head);
     const sub = document.createElement("div"); sub.className = "sub";
     g.files.forEach(f => sub.append(fileRow(f, g.name))); box.append(sub); ul.append(box);

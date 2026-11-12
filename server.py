@@ -38,7 +38,7 @@ def safe_name(name):
 def unique_path(folder, name):
     base, ext = os.path.splitext(name)
     path, n = os.path.join(folder, name), 1
-    while os.path.exists(path):
+    while os.path.exists(path) or os.path.exists(path + ".part"):
         path = os.path.join(folder, f"{base} ({n}){ext}")
         n += 1
     return path
@@ -64,9 +64,29 @@ def list_tree(root):
             files = list_dir(p)
             if files:
                 folders.append({"name": n, "files": files, "size": sum(f["size"] for f in files),
-                                "mtime": max(f["mtime"] for f in files)})
+                                "mtime": max(f["mtime"] for f in files), "busy": is_busy(p)})
     folders.sort(key=lambda i: -i["mtime"])
     return {"files": list_dir(root), "folders": folders}
+
+
+def is_busy(folder):
+    """True while a file is still being written into folder (upload or copy in progress)."""
+    return any(n.endswith(".part") for n in os.listdir(folder))
+
+
+def copy_in(src, folder):
+    """Copy src into folder without exposing a half-written file: write .part, then rename."""
+    dest = unique_path(folder, os.path.basename(src))
+    tmp = dest + ".part"
+    try:
+        shutil.copyfile(src, tmp)
+        shutil.copymode(src, tmp)
+        os.replace(tmp, dest)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
+    return dest
 
 
 def target_dir(root, folder):
@@ -161,6 +181,8 @@ class Handler(BaseHTTPRequestHandler):
             src = name and os.path.join(STATE["outbox"], name)
             if not src or not os.path.isdir(src):
                 return self.send(404, b"Not found")
+            if is_busy(src):
+                return self.send(409, b"Still copying on the PC. Try again in a moment.")
             with tempfile.TemporaryFile() as tmp:
                 with zipfile.ZipFile(tmp, "w", zipfile.ZIP_STORED) as z:
                     for f in list_dir(src):
