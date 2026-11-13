@@ -59,6 +59,7 @@
   .dl { flex:none; text-decoration:none; color:#fff; font-weight:700; font-size:14px; padding:9px 14px; border-radius:11px;
         background:linear-gradient(135deg,var(--a1),var(--a2)); box-shadow:0 6px 14px rgba(99,102,241,.35); }
   .dl.wait { background:var(--chip); color:var(--muted); box-shadow:none; }
+  .who { display:block; font-size:11px; opacity:.7; margin-bottom:2px; }
   .done { color:var(--ok); font-weight:700; font-size:14px; }
   .fail { color:var(--danger); font-weight:700; font-size:14px; }
   .empty { text-align:center; color:var(--muted); padding:22px 8px; }
@@ -153,6 +154,7 @@
   function add(m) {
     if (empty) { box.textContent = ""; empty = false; }
     const d = document.createElement("div"); d.className = "m " + (m.from === ME ? "me" : "them");
+    if (m.from !== ME && m.name) { const w = document.createElement("b"); w.className = "who"; w.textContent = m.name; d.append(w); }
     const body = document.createElement("span"); body.textContent = m.text; d.append(body);
     const cp = document.createElement("button"); cp.className = "cp"; cp.type = "button"; cp.textContent = "Copy";
     cp.onclick = () => copyText(m.text).then(() => { cp.textContent = "Copied ✓"; setTimeout(() => cp.textContent = "Copy", 1200); });
@@ -210,6 +212,9 @@ document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => {
   document.querySelectorAll(".pane").forEach(p => p.classList.toggle("on", p.id === b.dataset.t));
 });
 
+let pcName = "";
+const esc = s => s.replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
 async function load() {
   let r;
   try { r = await fetch("/api/files"); }
@@ -224,6 +229,8 @@ async function load() {
   }
   $("lock").style.display = ok ? "none" : "block"; $("app").style.display = ok ? "block" : "none";
   $("live").style.display = ok ? "flex" : "none";
+  if (ok && !pcName) { try { pcName = (await (await fetch("/api/info")).json()).host; } catch (e) {} }
+  if (ok && pcName) $("live").innerHTML = "<i></i>Connected to " + esc(pcName);
   window.setChatVisible && setChatVisible(ok);
   if (!ok) return;
   const { files, folders } = await r.json();

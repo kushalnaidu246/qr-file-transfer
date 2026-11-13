@@ -28,6 +28,8 @@
   .badge { margin-left:auto; display:flex; align-items:center; gap:7px; font-size:13px; font-weight:600;
            padding:6px 12px; border-radius:99px; background:var(--chip); color:var(--muted); }
   .dot { width:8px; height:8px; border-radius:50%; background:var(--warn); }
+  #devs { display:flex; flex-direction:column; align-items:flex-end; gap:2px; margin:-6px 4px 10px; font-size:12px; color:var(--muted); }
+  .who { display:block; font-size:11px; opacity:.7; margin-bottom:2px; }
   .badge.on { color:var(--ok); background:rgba(16,185,129,.12); }
   .badge.on .dot { background:var(--ok); box-shadow:0 0 0 4px rgba(16,185,129,.2); }
   .card { background:var(--card); border-radius:20px; padding:20px; margin-bottom:16px; box-shadow:var(--shadow); }
@@ -110,6 +112,7 @@
     <button class="pairbtn" id="pairbtn" style="display:none"></button>
     <div class="badge" id="badge"><span class="dot"></span><span id="bt">Waiting for phone</span></div>
   </header>
+  <div id="devs"></div>
 
   <div id="banner">
     <div class="t"><b>New file from your phone</b><span id="bname"></span></div>
@@ -149,6 +152,7 @@
   function add(m) {
     if (empty) { box.textContent = ""; empty = false; }
     const d = document.createElement("div"); d.className = "m " + (m.from === ME ? "me" : "them");
+    if (m.from !== ME && m.name) { const w = document.createElement("b"); w.className = "who"; w.textContent = m.name; d.append(w); }
     const body = document.createElement("span"); body.textContent = m.text; d.append(body);
     const cp = document.createElement("button"); cp.className = "cp"; cp.type = "button"; cp.textContent = "Copy";
     cp.onclick = () => copyText(m.text).then(() => { cp.textContent = "Copied ✓"; setTimeout(() => cp.textContent = "Copy", 1200); });
@@ -232,7 +236,15 @@ async function tick() {
   if (!qrDrawn) { drawQR(d.qr); $("url").textContent = d.url.split("?")[0]; qrDrawn = true; }
   $("pin").textContent = d.pin;
   const on = d.connected.length > 0;
-  $("badge").className = "badge" + (on ? " on" : ""); $("bt").textContent = on ? "Phone connected" : "Waiting for phone";
+  $("badge").className = "badge" + (on ? " on" : "");
+  $("bt").textContent = on ? (d.connected.length === 1 ? "1 phone connected" : d.connected.length + " phones connected") : "Waiting for phone";
+  $("devs").textContent = "";
+  d.connected.forEach(p => {
+    const r = document.createElement("div"); r.className = "dev";
+    const ago = Math.max(0, Math.round(Date.now() / 1000 - p.last_seen));
+    r.textContent = p.name + " · " + p.ip + " · " + (ago < 5 ? "active now" : ago + "s ago");
+    $("devs").append(r);
+  });
   showQR = showQR && on;  // phone dropped off: QR comes back on its own
   $("qrcard").style.display = (!on || showQR) ? "block" : "none";
   $("pairbtn").style.display = on ? "inline-block" : "none";
