@@ -16,7 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import qrcode
 
 HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
-STATE = {"chat": [], "pin": "", "fails": 0, "token": "", "inbox": "", "outbox": "", "url": "", "seen": {}}
+STATE = {"chat": [], "pin": "", "fails": 0, "token": "", "inbox": "", "outbox": "", "url": "", "seen": {}, "names": {}, "host": ""}
 
 
 def local_ip():
@@ -28,6 +28,18 @@ def local_ip():
         return "127.0.0.1"
     finally:
         s.close()
+
+
+def device_name(ua):
+    """Short readable label like 'iPhone · Safari' from a User-Agent string."""
+    ua = ua or ""
+    os_ = next((n for k, n in (("iPhone", "iPhone"), ("iPad", "iPad"), ("Android", "Android"),
+                               ("Windows", "Windows PC"), ("Macintosh", "Mac"), ("CrOS", "Chromebook"),
+                               ("Linux", "Linux")) if k in ua), "Phone")
+    br = next((n for k, n in (("EdgA/", "Edge"), ("Edg/", "Edge"), ("OPR/", "Opera"), ("SamsungBrowser", "Samsung Internet"),
+                              ("FxiOS", "Firefox"), ("Firefox", "Firefox"), ("CriOS", "Chrome"), ("Chrome", "Chrome"),
+                              ("Safari", "Safari")) if k in ua), "")
+    return f"{os_} · {br}" if br else os_
 
 
 def safe_name(name):
@@ -143,8 +155,16 @@ class Handler(BaseHTTPRequestHandler):
     def authed(self):
         ok = self.cookie("t") == STATE["token"]
         if ok:
-            STATE["seen"][self.client_address[0]] = time.time()  # last request from this phone
+            ip = self.client_address[0]
+            STATE["seen"][ip] = time.time()  # last request from this phone
+            STATE["names"][ip] = device_name(self.headers.get("User-Agent"))
         return ok
+
+    def connected_phones(self):
+        now = time.time()
+        live = [{"name": STATE["names"].get(ip, "Phone"), "ip": ip, "last_seen": t}
+                for ip, t in list(STATE["seen"].items()) if now - t < LIVE_SECS]
+        return sorted(live, key=lambda p: p["ip"])
 
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
@@ -160,7 +180,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.chat_list(parsed.query)
             if path == "/desktop/info":
                 data = {"url": STATE["url"], "qr": qr_matrix(STATE["url"]),
-                        "pin": STATE["pin"], "connected": sorted(ip for ip, t in list(STATE["seen"].items()) if time.time() - t < LIVE_SECS),
+                        "pin": STATE["pin"], "connected": self.connected_phones(),
                         "inbox": list_tree(STATE["inbox"]), "outbox": list_tree(STATE["outbox"])}
                 return self.send(200, json.dumps(data).encode(), "application/json")
             return self.send(404)
@@ -174,6 +194,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(401, b"pin" if self.cookie("q") == STATE["token"] else b"scan")
         if path == "/chat":
             return self.chat_list(parsed.query)
+        if path == "/api/info":
+            return self.send(200, json.dumps({"host": STATE["host"]}).encode(), "application/json")
         if path == "/api/files":
             return self.send(200, json.dumps(list_tree(STATE["outbox"])).encode(), "application/json")
         if path.startswith("/zip/"):
@@ -221,22 +243,22 @@ class Handler(BaseHTTPRequestHandler):
         return self.send(200, json.dumps([m for m in STATE["chat"] if m["id"] > since]).encode(),
                          "application/json")
 
-    def chat_add(self, sender):
+    def chat_add(self, sender, name):
         n = min(int(self.headers.get("Content-Length", 0)), 30000)
         text = self.rfile.read(n).decode("utf-8", "replace").rstrip()[:5000]
         if not text:
             return self.send(400, b"Empty")
         with CHAT_LOCK:
             last = STATE["chat"][-1]["id"] if STATE["chat"] else 0
-            STATE["chat"].append({"id": last + 1, "from": sender, "text": text, "ts": time.time()})
+            STATE["chat"].append({"id": last + 1, "from": sender, "name": name, "text": text, "ts": time.time()})
             del STATE["chat"][:-200]
         self.send(204)
 
     def do_POST(self):
         if self.path == "/chat":
-            return self.chat_add("phone") if self.authed() else self.send(401, b"scan")
+            return self.chat_add("phone", STATE["names"].get(self.client_address[0], "Phone")) if self.authed() else self.send(401, b"scan")
         if self.path == "/desktop/chat":
-            return self.chat_add("pc") if self.is_local() else self.send(403)
+            return self.chat_add("pc", STATE["host"] or "PC") if self.is_local() else self.send(403)
         if self.path != "/pair":
             return self.send(404)
         n = min(int(self.headers.get("Content-Length", 0)), 64)
@@ -298,7 +320,7 @@ def start(share, port=8000):
     token = secrets.token_urlsafe(8)
     STATE["chat"] = []
     STATE.update(token=token, inbox=inbox, outbox=outbox,
-                 url=f"http://{local_ip()}:{port}/?t={token}", seen={})
+                 url=f"http://{local_ip()}:{port}/?t={token}", seen={}, names={}, host=socket.gethostname())
     new_pin()
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     return httpd, port
