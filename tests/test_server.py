@@ -454,15 +454,19 @@ class UploadTests(ServerCase):
 
     def test_dropped_upload_leaves_no_part_file_behind(self):
         auth = self.pair()
-        with socket.create_connection(("127.0.0.1", self.port), timeout=10) as s:
-            s.sendall((f"PUT /upload/cut.bin?folder=Cut HTTP/1.1\r\nHost: 127.0.0.1:{self.port}\r\n"
-                       f"Cookie: {auth['Cookie']}\r\nContent-Length: 5000000\r\n\r\n").encode() + b"x" * 1000)
-        for _ in range(50):  # the server notices the dropped connection shortly after
-            if not os.path.isdir(os.path.join(self.inbox, "Cut")) or not os.listdir(os.path.join(self.inbox, "Cut")):
-                break
-            threading.Event().wait(0.1)
-        left = os.listdir(os.path.join(self.inbox, "Cut")) if os.path.isdir(os.path.join(self.inbox, "Cut")) else []
-        self.assertEqual(left, [])
+        cleaned, real_remove = threading.Event(), os.remove
+
+        def spy(path, *a, **k):
+            real_remove(path, *a, **k)
+            if str(path).endswith("cut.bin.part"):
+                cleaned.set()
+
+        with mock.patch.object(os, "remove", spy):
+            with socket.create_connection(("127.0.0.1", self.port), timeout=10) as s:
+                s.sendall((f"PUT /upload/cut.bin?folder=Cut HTTP/1.1\r\nHost: 127.0.0.1:{self.port}\r\n"
+                           f"Cookie: {auth['Cookie']}\r\nContent-Length: 5000000\r\n\r\n").encode() + b"x" * 1000)
+            self.assertTrue(cleaned.wait(10), "server never cleaned up the dropped upload")
+        self.assertEqual(os.listdir(os.path.join(self.inbox, "Cut")), [])
 
     def test_inbox_folder_shows_busy_while_a_file_is_still_arriving(self):
         auth = self.pair()
@@ -655,6 +659,267 @@ class StartupTests(TmpDirCase):
         self.addCleanup(httpd.server_close)
         self.addCleanup(httpd.shutdown)
         self.assertNotEqual(got, port)
+
+
+class ResolveTests(TmpDirCase):
+    def test_file_in_root_and_in_folder(self):
+        self.assertEqual(server.resolve(self.tmp, "a.txt"), os.path.join(self.tmp, "a.txt"))
+        self.assertEqual(server.resolve(self.tmp, "a.txt", "Trip"), os.path.join(self.tmp, "Trip", "a.txt"))
+        self.assertEqual(server.resolve(self.tmp, None, "Trip"), os.path.join(self.tmp, "Trip"))
+        self.assertEqual(server.resolve(self.tmp, "", "Trip"), os.path.join(self.tmp, "Trip"))
+
+    def test_invalid_names_never_fall_back_to_the_root_folder(self):
+        for name, folder in ((None, ".."), ("", ".."), (None, None), ("", ""), ("..", None), (None, "."),
+                             ("a.txt", ".."), ("..", "Trip"), (None, "/"), ("/", None)):
+            self.assertIsNone(server.resolve(self.tmp, name, folder), (name, folder))
+
+    def test_path_tricks_are_reduced_to_a_single_name(self):
+        self.assertEqual(server.resolve(self.tmp, "../x.txt"), os.path.join(self.tmp, "x.txt"))
+        self.assertEqual(server.resolve(self.tmp, None, "../../Trip"), os.path.join(self.tmp, "Trip"))
+
+
+class CollectFilesTests(TmpDirCase):
+    def make(self, *rel):
+        for r in rel:
+            p = os.path.join(self.tmp, *r.split("/"))
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            write_text(p)
+
+    def test_finds_files_in_subfolders_and_skips_hidden(self):
+        self.make("a.txt", "sub/b.txt", "sub/deep/c.txt", ".hidden", ".git/config", "sub/.DS_Store")
+        rel = sorted(os.path.relpath(f, self.tmp).replace(os.sep, "/") for f in server.collect_files(self.tmp))
+        self.assertEqual(rel, ["a.txt", "sub/b.txt", "sub/deep/c.txt"])
+
+    def test_empty_folder(self):
+        self.assertEqual(server.collect_files(self.tmp), [])
+
+
+class AddToOutboxTests(ServerCase):
+    def setUp(self):
+        super().setUp()
+        self.src = os.path.join(self.tmp, "dropped")
+        shutil.rmtree(self.src, ignore_errors=True)
+        for rel in ("Photos/a.jpg", "Photos/2024/b.jpg", "Photos/2024/raw/c.jpg", "Photos/.hidden", "loose.txt"):
+            path = os.path.join(self.src, *rel.split("/"))
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            write_text(path, rel)
+
+    def test_dropped_folder_includes_subfolder_files(self):
+        server.add_to_outbox([os.path.join(self.src, "Photos")])
+        self.assertEqual(sorted(os.listdir(os.path.join(self.outbox, "Photos"))), ["a.jpg", "b.jpg", "c.jpg"])
+
+    def test_typed_folder_name_wins_over_dropped_folder_name(self):
+        server.add_to_outbox([os.path.join(self.src, "Photos")], "Holiday")
+        self.assertEqual(len(os.listdir(os.path.join(self.outbox, "Holiday"))), 3)
+        self.assertFalse(os.path.exists(os.path.join(self.outbox, "Photos")))
+
+    def test_loose_file_goes_to_box_or_named_folder(self):
+        server.add_to_outbox([os.path.join(self.src, "loose.txt")])
+        server.add_to_outbox([os.path.join(self.src, "loose.txt")], "Docs")
+        self.assertEqual(os.listdir(self.outbox).count("loose.txt"), 1)
+        self.assertEqual(os.listdir(os.path.join(self.outbox, "Docs")), ["loose.txt"])
+
+    def test_same_file_names_in_different_subfolders_do_not_overwrite(self):
+        for sub in ("one", "two"):
+            os.makedirs(os.path.join(self.src, "Dup", sub))
+            write_text(os.path.join(self.src, "Dup", sub, "same.txt"), sub)
+        server.add_to_outbox([os.path.join(self.src, "Dup")])
+        names = sorted(os.listdir(os.path.join(self.outbox, "Dup")))
+        self.assertEqual(names, ["same (1).txt", "same.txt"])
+        self.assertEqual(sorted(read_bytes(os.path.join(self.outbox, "Dup", n)) for n in names), [b"one", b"two"])
+
+
+class ParseRangeTests(unittest.TestCase):
+    def test_no_or_unusable_header_means_whole_file(self):
+        for h in (None, "", "items=0-5", "bytes=abc-def", "bytes=5-2", "bytes=-", "bytes=0-1,5-6", "bytes=-x"):
+            self.assertIsNone(server.parse_range(h, 100), h)
+
+    def test_explicit_open_ended_and_suffix_ranges(self):
+        self.assertEqual(server.parse_range("bytes=0-9", 100), (0, 9))
+        self.assertEqual(server.parse_range("bytes=90-", 100), (90, 99))
+        self.assertEqual(server.parse_range("bytes=-10", 100), (90, 99))
+        self.assertEqual(server.parse_range("bytes=-500", 100), (0, 99))
+
+    def test_end_past_the_file_is_clamped(self):
+        self.assertEqual(server.parse_range("bytes=50-5000", 100), (50, 99))
+
+    def test_start_past_the_file_is_unsatisfiable(self):
+        self.assertEqual(server.parse_range("bytes=100-", 100), "unsatisfiable")
+        self.assertEqual(server.parse_range("bytes=-0", 100), "unsatisfiable")
+
+    def test_empty_file_ignores_ranges(self):
+        self.assertIsNone(server.parse_range("bytes=0-5", 0))
+
+
+class RangeDownloadTests(ServerCase):
+    DATA = bytes(range(256)) * 40  # 10240 bytes, every offset has a distinct-ish value
+
+    def setUp(self):
+        super().setUp()
+        with open(os.path.join(self.outbox, "big.bin"), "wb") as f:
+            f.write(self.DATA)
+        self.auth = self.pair()
+
+    def get(self, rng=None):
+        h = dict(self.auth)
+        if rng:
+            h["Range"] = rng
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        c.request("GET", "/files/big.bin", headers={"Host": f"127.0.0.1:{self.port}", **h})
+        r = c.getresponse()
+        body = r.read()
+        c.close()
+        return r, body
+
+    def test_full_download_advertises_range_support(self):
+        r, body = self.get()
+        self.assertEqual((r.status, body), (200, self.DATA))
+        self.assertEqual(r.getheader("Accept-Ranges"), "bytes")
+        self.assertEqual(r.getheader("Content-Length"), str(len(self.DATA)))
+
+    def test_partial_content(self):
+        r, body = self.get("bytes=100-199")
+        self.assertEqual(r.status, 206)
+        self.assertEqual(body, self.DATA[100:200])
+        self.assertEqual(r.getheader("Content-Range"), f"bytes 100-199/{len(self.DATA)}")
+        self.assertEqual(r.getheader("Content-Length"), "100")
+
+    def test_open_ended_and_suffix(self):
+        self.assertEqual(self.get("bytes=10000-")[1], self.DATA[10000:])
+        self.assertEqual(self.get("bytes=-240")[1], self.DATA[-240:])
+
+    def test_resuming_an_interrupted_download_gives_the_identical_file(self):
+        first = self.get("bytes=0-4999")[1]  # "connection dropped" after 5000 bytes
+        rest = self.get(f"bytes={len(first)}-")[1]
+        self.assertEqual(first + rest, self.DATA)
+
+    def test_unsatisfiable_range_is_416(self):
+        r, _ = self.get(f"bytes={len(self.DATA)}-")
+        self.assertEqual(r.status, 416)
+        self.assertEqual(r.getheader("Content-Range"), f"bytes */{len(self.DATA)}")
+
+    def test_garbage_range_is_ignored(self):
+        r, body = self.get("bytes=abc")
+        self.assertEqual((r.status, body), (200, self.DATA))
+
+    def test_empty_file_downloads_cleanly(self):
+        open(os.path.join(self.outbox, "empty.txt"), "wb").close()
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        c.request("GET", "/files/empty.txt", headers={"Host": f"127.0.0.1:{self.port}", "Range": "bytes=0-5", **self.auth})
+        r = c.getresponse()
+        self.assertEqual((r.status, r.read()), (200, b""))
+        c.close()
+
+    def test_range_still_needs_login(self):
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=10)
+        c.request("GET", "/files/big.bin", headers={"Host": f"127.0.0.1:{self.port}", "Range": "bytes=0-9"})
+        self.assertEqual(c.getresponse().status, 401)
+        c.close()
+
+
+class StreamingZipTests(ServerCase):
+    def test_large_zip_is_streamed_and_valid(self):
+        import io
+        import zipfile
+        os.makedirs(os.path.join(self.outbox, "Big"))
+        payload = {f"f{i}.bin": os.urandom(700_000) for i in range(4)}
+        for n, d in payload.items():
+            with open(os.path.join(self.outbox, "Big", n), "wb") as f:
+                f.write(d)
+        auth = self.pair()
+        c = http.client.HTTPConnection("127.0.0.1", self.port, timeout=20)
+        c.request("GET", "/zip/Big", headers={"Host": f"127.0.0.1:{self.port}", **auth})
+        r = c.getresponse()
+        body = r.read()
+        c.close()
+        self.assertEqual(r.status, 200)
+        self.assertEqual(r.getheader("Content-Type"), "application/zip")
+        self.assertIsNone(r.getheader("Content-Length"))  # streamed, not built in advance
+        self.assertIn("Big.zip", r.getheader("Content-Disposition"))
+        z = zipfile.ZipFile(io.BytesIO(body))
+        self.assertIsNone(z.testzip())
+        self.assertEqual(sorted(z.namelist()), [f"Big/{n}" for n in sorted(payload)])
+        for n, d in payload.items():
+            self.assertEqual(z.read(f"Big/{n}"), d)
+
+    def test_zip_does_not_need_a_temporary_file(self):
+        os.makedirs(os.path.join(self.outbox, "T"))
+        write_text(os.path.join(self.outbox, "T", "a.txt"), "hello")
+        auth = self.pair()
+        with mock.patch("tempfile.TemporaryFile", side_effect=AssertionError("temp file used")):
+            st, _, body = self.req("GET", "/zip/T", auth)
+        self.assertEqual(st, 200)
+        self.assertGreater(len(body), 20)
+
+    def test_client_hanging_up_mid_zip_does_not_break_the_server(self):
+        os.makedirs(os.path.join(self.outbox, "Cut"))
+        with open(os.path.join(self.outbox, "Cut", "big.bin"), "wb") as f:
+            f.write(os.urandom(8_000_000))
+        auth = self.pair()
+        with socket.create_connection(("127.0.0.1", self.port), timeout=10) as s:
+            s.sendall((f"GET /zip/Cut HTTP/1.1\r\nHost: 127.0.0.1:{self.port}\r\nCookie: {auth['Cookie']}\r\n\r\n").encode())
+            s.recv(1000)
+        self.assertEqual(self.req("GET", "/desktop/info")[0], 200)
+
+
+class QrComputedOnceTests(ServerCase):
+    def test_info_polling_does_not_recompute_the_qr_code(self):
+        with mock.patch.object(server, "qr_matrix", side_effect=AssertionError("recomputed")):
+            for _ in range(3):
+                info = json.loads(self.req("GET", "/desktop/info")[2])
+        self.assertEqual(info["qr"], server.STATE["qr"])
+        self.assertEqual(info["qr"], server.qr_matrix(server.STATE["url"]))
+
+
+class ConcurrentPairingTests(ServerCase):
+    def test_parallel_wrong_guesses_are_counted_exactly(self):
+        server.new_pin()
+        codes, lock = [], threading.Lock()
+
+        # 5 characters can never equal a 4-digit PIN, whatever the PIN becomes after each lockout.
+        def guess5():
+            c = self.req("POST", "/pair", {"Cookie": f"q={self.token}"}, "99999")[0]
+            with lock:
+                codes.append(c)
+
+        threads = [threading.Thread(target=guess5) for _ in range(20)]
+        [t.start() for t in threads]
+        [t.join() for t in threads]
+        self.assertEqual(codes.count(429), 4)  # one lockout per 5 failures, none lost
+        self.assertEqual(codes.count(403), 16)
+        self.assertEqual(server.STATE["fails"], 0)
+
+
+class OutboxClearedOnStartTests(TmpDirCase):
+    def test_leftover_copies_are_deleted_not_archived(self):
+        share = os.path.join(self.tmp, "share")
+        os.makedirs(os.path.join(share, "For phone", "Trip"))
+        write_text(os.path.join(share, "For phone", "Trip", "a.jpg"))
+        write_text(os.path.join(share, "For phone", "loose.txt"))
+        httpd, _ = server.start(share, free_port())
+        self.addCleanup(httpd.server_close)
+        self.addCleanup(httpd.shutdown)
+        self.assertEqual(os.listdir(os.path.join(share, "For phone")), [])
+        self.assertFalse(os.path.exists(os.path.join(share, "Earlier sessions")))
+
+    def test_unsaved_received_files_are_still_archived(self):
+        share = os.path.join(self.tmp, "share")
+        os.makedirs(os.path.join(share, "From phone", "Trip"))
+        write_text(os.path.join(share, "From phone", "Trip", "a.jpg"))
+        httpd, _ = server.start(share, free_port())
+        self.addCleanup(httpd.server_close)
+        self.addCleanup(httpd.shutdown)
+        self.assertEqual(os.listdir(os.path.join(share, "From phone")), [])
+        self.assertEqual(os.listdir(os.path.join(share, "Earlier sessions", "Trip")), ["a.jpg"])
+
+    def test_hidden_files_in_the_outbox_are_left_alone(self):
+        share = os.path.join(self.tmp, "share")
+        os.makedirs(os.path.join(share, "For phone"))
+        write_text(os.path.join(share, "For phone", ".keep"))
+        httpd, _ = server.start(share, free_port())
+        self.addCleanup(httpd.server_close)
+        self.addCleanup(httpd.shutdown)
+        self.assertEqual(os.listdir(os.path.join(share, "For phone")), [".keep"])
 
 
 if __name__ == "__main__":

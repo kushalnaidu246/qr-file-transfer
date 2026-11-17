@@ -29,17 +29,15 @@ class Api:
         self.last_dir = os.path.expanduser("~/Downloads")
 
     def _src(self, name, folder=None, box="inbox"):
-        base = server.STATE[box]
-        sub = server.safe_name(folder) if folder else ""
-        parts = [base] + ([sub] if sub else []) + ([server.safe_name(name)] if name and server.safe_name(name) else [])
-        return os.path.join(*parts)
+        """Path of a file or folder in a box, or None if the name is invalid (never the box itself)."""
+        return server.resolve(server.STATE[box], name, folder)
 
     def save(self, name, folder=None):
         """Save one file (asks for a file name) or a whole named folder (asks where to create it)."""
         win = webview.windows[0]
         if folder:
             src = self._src("", folder)
-            if not os.path.isdir(src):
+            if not src or not os.path.isdir(src):
                 return False
             if server.is_busy(src):
                 return "busy"  # phone is still sending into this folder
@@ -59,7 +57,7 @@ class Api:
                 pass
             return True
         src = self._src(name)
-        if not os.path.isfile(src):
+        if not src or not os.path.isfile(src):
             return False
         dest = win.create_file_dialog(webview.SAVE_DIALOG, directory=self.last_dir, save_filename=name)
         if not dest:
@@ -71,6 +69,8 @@ class Api:
 
     def discard(self, name, folder=None):
         p = self._src(name, folder)
+        if not p:
+            return
         if folder and not name:
             shutil.rmtree(p, ignore_errors=True)
         elif os.path.isfile(p):
@@ -87,6 +87,8 @@ class Api:
 
     def remove_outgoing(self, name, folder=None):
         p = self._src(name, folder, "outbox")
+        if not p:
+            return
         if folder and not name:
             shutil.rmtree(p, ignore_errors=True)
         elif os.path.isfile(p):
@@ -96,27 +98,13 @@ class Api:
         reveal(SHARE)
 
 
-def add_to_outbox(paths, folder):
-    """Copy dropped files (or the files of dropped folders) into the 'For phone' box."""
-    out = server.STATE["outbox"]
-    for p in paths:
-        if os.path.isdir(p):
-            target = server.target_dir(out, folder or os.path.basename(p.rstrip("/")))
-            names = [os.path.join(p, n) for n in os.listdir(p)]
-            files = [f for f in names if os.path.isfile(f) and not os.path.basename(f).startswith(".")]
-        else:
-            target, files = server.target_dir(out, folder), [p]
-        for f in files:
-            server.copy_in(f, target)
-
-
 def on_drop(event):
     win = webview.windows[0]
     paths = [f["pywebviewFullPath"] for f in event["dataTransfer"].get("files", [])
              if f.get("pywebviewFullPath")]
     if paths:
         folder = (win.evaluate_js('document.getElementById("folder").value') or "").strip()
-        add_to_outbox(paths, folder or None)
+        server.add_to_outbox(paths, folder or None)
         win.evaluate_js("tick()")
 
 

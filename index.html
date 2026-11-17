@@ -215,6 +215,7 @@ document.querySelectorAll(".tabs button").forEach(b => b.onclick = () => {
 let pcName = "";
 const esc = s => s.replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
+let lastList = null;
 async function load() {
   let r;
   try { r = await fetch("/api/files"); }
@@ -232,8 +233,11 @@ async function load() {
   if (ok && !pcName) { try { pcName = (await (await fetch("/api/info")).json()).host; } catch (e) {} }
   if (ok && pcName) $("live").innerHTML = "<i></i>Connected to " + esc(pcName);
   window.setChatVisible && setChatVisible(ok);
-  if (!ok) return;
-  const { files, folders } = await r.json();
+  if (!ok) { lastList = null; return; }
+  const raw = await r.text();
+  if (raw === lastList) return;  // nothing changed: don't rebuild the list (a redraw can swallow a tap on Download)
+  lastList = raw;
+  const { files, folders } = JSON.parse(raw);
   const total = files.length + folders.length;
   $("badge").textContent = total ? "(" + total + ")" : "";
   const ul = $("list"); ul.textContent = "";
@@ -264,7 +268,7 @@ async function load() {
   files.forEach(f => ul.append(fileRow(f, "")));
 }
 
-function upload(file) {
+function upload(file, fo) {
   const row = document.createElement("div"); row.className = "row";
   const m = document.createElement("div"); m.className = "meta";
   m.innerHTML = '<div class="name"></div><div class="size">Sending…</div><div class="bar"><i></i></div>';
@@ -274,7 +278,6 @@ function upload(file) {
   const bar = m.querySelector("i"), sub = m.querySelector(".size");
   return new Promise(res => {
     const x = new XMLHttpRequest();
-    const fo = $("folder").value.trim();
     x.open("PUT", "/upload/" + encodeURIComponent(file.name) + (fo ? "?folder=" + encodeURIComponent(fo) : ""));
     x.upload.onprogress = e => { if (e.lengthComputable) { const p = Math.round(e.loaded / e.total * 100); bar.style.width = p + "%"; st.textContent = p + "%"; } };
     x.onload = () => { const ok = x.status === 201; bar.style.width = ok ? "100%" : "0"; sub.textContent = fmt(file.size);
@@ -283,7 +286,10 @@ function upload(file) {
     x.send(file);
   });
 }
-async function sendAll(files) { for (const f of files) await upload(f); }
+async function sendAll(files) {
+  const fo = $("folder").value.trim();  // read once, so editing the field mid-batch can't split the batch
+  for (const f of files) await upload(f, fo);
+}
 
 $("drop").onclick = () => $("picker").click();
 $("picker").onchange = e => { sendAll([...e.target.files]); e.target.value = ""; };
