@@ -5,7 +5,6 @@ import os
 import shutil
 import socket
 import sys
-import tempfile
 import time
 import threading
 import urllib.parse
@@ -17,7 +16,7 @@ import qrcode
 
 HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 STATE = {"chat": [], "pin": "", "fails": 0, "token": "", "inbox": "", "outbox": "", "url": "", "seen": {}, "names": {}, "host": "",
-         "sessions": set(), "hosts": set(), "origins": set()}
+         "sessions": set(), "hosts": set(), "origins": set(), "qr": []}
 
 
 def local_ip():
@@ -125,6 +124,66 @@ def copy_in(src, folder):
     return dest
 
 
+def resolve(root, name=None, folder=None):
+    """Path of a file (or folder) inside root, or None if a name is invalid or nothing was asked for.
+
+    Never falls back to root itself, so callers can't be tricked into deleting a whole box."""
+    sub = safe_name(folder) if folder else ""
+    leaf = safe_name(name) if name else ""
+    if (folder and not sub) or (name and not leaf) or not (sub or leaf):
+        return None
+    return os.path.join(*[p for p in (root, sub, leaf) if p])
+
+
+def collect_files(root):
+    """Every regular, non-hidden file under root, including files in subfolders."""
+    found = []
+    for dirpath, dirs, files in os.walk(root):
+        dirs[:] = sorted(d for d in dirs if not d.startswith("."))
+        found += [os.path.join(dirpath, f) for f in sorted(files)
+                  if not f.startswith(".") and os.path.isfile(os.path.join(dirpath, f))]
+    return found
+
+
+def add_to_outbox(paths, folder=None):
+    """Copy files (or everything inside dropped folders, subfolders included) into the 'For phone' box.
+
+    The phone shows one level of folders, so files from subfolders are put directly in the dropped folder."""
+    out = STATE["outbox"]
+    for p in paths:
+        if os.path.isdir(p):
+            target = target_dir(out, folder or os.path.basename(p.rstrip("/\\")))
+            files = collect_files(p)
+        else:
+            target, files = target_dir(out, folder), [p]
+        for f in files:
+            copy_in(f, target)
+
+
+def parse_range(header, size):
+    """Parse a 'Range: bytes=...' header for a file of `size` bytes.
+
+    Returns None (no usable range: send the whole file), "unsatisfiable", or (first, last) inclusive."""
+    if not header or not header.startswith("bytes=") or "," in header or size == 0:
+        return None
+    first, _, last = header[6:].strip().partition("-")
+    try:
+        if first == "":  # suffix: the last N bytes
+            n = int(last)
+            if n <= 0:
+                return "unsatisfiable"
+            return max(size - n, 0), size - 1
+        start = int(first)
+        end = int(last) if last else size - 1
+    except ValueError:
+        return None
+    if start < 0 or (last and end < start):
+        return None  # malformed: ignore the header
+    if start >= size:
+        return "unsatisfiable"
+    return start, min(end, size - 1)
+
+
 def target_dir(root, folder):
     """Subfolder of root for an optional folder name (created on demand)."""
     name = safe_name(folder) if folder else None
@@ -147,6 +206,7 @@ def qr_matrix(text):
 
 
 CHAT_LOCK = threading.Lock()
+PAIR_LOCK = threading.Lock()  # PIN checks and the failed-attempt counter run on several threads
 LIVE_SECS = 30  # a phone counts as connected while it keeps polling (page closed => drops off)
 COOKIE_AGE = 86400  # pairing survives closing the tab / reopening from history for a day
 
@@ -212,7 +272,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/desktop/chat":
                 return self.chat_list(parsed.query)
             if path == "/desktop/info":
-                data = {"url": STATE["url"], "qr": qr_matrix(STATE["url"]),
+                data = {"url": STATE["url"], "qr": STATE["qr"],
                         "pin": STATE["pin"], "connected": self.connected_phones(),
                         "inbox": list_tree(STATE["inbox"]), "outbox": list_tree(STATE["outbox"])}
                 return self.send(200, json.dumps(data).encode(), "application/json")
@@ -238,19 +298,19 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(404, b"Not found")
             if is_busy(src):
                 return self.send(409, b"Still copying on the PC. Try again in a moment.")
-            with tempfile.TemporaryFile() as tmp:
-                with zipfile.ZipFile(tmp, "w", zipfile.ZIP_STORED) as z:
+            # Streamed straight to the phone: no temporary copy on disk, and the download starts at once.
+            self.send_response(200)
+            self.send_header("Content-Type", "application/zip")
+            self.send_header("Content-Disposition",
+                             "attachment; filename*=UTF-8''" + urllib.parse.quote(name + ".zip"))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            try:
+                with zipfile.ZipFile(self.wfile, "w", zipfile.ZIP_STORED) as z:
                     for f in list_dir(src):
                         z.write(os.path.join(src, f["name"]), f"{name}/{f['name']}")
-                size = tmp.tell()
-                tmp.seek(0)
-                self.send_response(200)
-                self.send_header("Content-Type", "application/zip")
-                self.send_header("Content-Length", str(size))
-                self.send_header("Content-Disposition",
-                                 "attachment; filename*=UTF-8''" + urllib.parse.quote(name + ".zip"))
-                self.end_headers()
-                shutil.copyfileobj(tmp, self.wfile, 1 << 20)
+            except OSError:
+                pass  # phone went away (or a file was removed) mid-download
             return
         if path.startswith("/files/"):
             name = safe_name(path[7:])
@@ -259,15 +319,26 @@ class Handler(BaseHTTPRequestHandler):
             p = name and os.path.join(STATE["outbox"], sub or "", name)
             if not p or not os.path.isfile(p):
                 return self.send(404, b"Not found")
-            self.send_response(200)
+            size = os.path.getsize(p)
+            rng = parse_range(self.headers.get("Range"), size)  # lets an interrupted download resume
+            if rng == "unsatisfiable":
+                return self.send(416, b"Range not satisfiable", headers={"Content-Range": f"bytes */{size}"})
+            first, last = rng if rng else (0, size - 1)
+            self.send_response(206 if rng else 200)
             self.send_header("Content-Type", "application/octet-stream")
-            self.send_header("Content-Length", str(os.path.getsize(p)))
+            self.send_header("Content-Length", str(last - first + 1 if size else 0))
+            self.send_header("Accept-Ranges", "bytes")
+            if rng:
+                self.send_header("Content-Range", f"bytes {first}-{last}/{size}")
             self.send_header("Content-Disposition",
                              "attachment; filename*=UTF-8''" + urllib.parse.quote(name))
             self.end_headers()
+            left = last - first + 1 if size else 0
             with open(p, "rb") as f:
-                while chunk := f.read(1 << 20):
+                f.seek(first)
+                while left > 0 and (chunk := f.read(min(1 << 20, left))):
                     self.wfile.write(chunk)
+                    left -= len(chunk)
             return
         self.send(404)
 
@@ -318,16 +389,17 @@ class Handler(BaseHTTPRequestHandler):
         pin = self.rfile.read(min(n, 64)).decode("utf-8", "replace").strip()
         if self.cookie("q") != STATE["token"]:
             return self.send(401, b"Scan the QR code first")
-        if secrets.compare_digest(pin.encode(), STATE["pin"].encode()):
-            new_pin()  # a PIN works once
-            sid = secrets.token_urlsafe(32)  # this phone's own login token, never the one in the QR link
-            STATE["sessions"].add(sid)
-            return self.send(204, headers={"Set-Cookie":
-                                           f"t={sid}; Path=/; Max-Age={COOKIE_AGE}; SameSite=Strict; HttpOnly"})
-        STATE["fails"] += 1
-        if STATE["fails"] >= 5:
-            new_pin()  # too many guesses: old PIN is dead
-            return self.send(429, b"Too many attempts. Look at the new PIN on your PC.")
+        with PAIR_LOCK:
+            if secrets.compare_digest(pin.encode(), STATE["pin"].encode()):
+                new_pin()  # a PIN works once
+                sid = secrets.token_urlsafe(32)  # this phone's own login token, never the one in the QR link
+                STATE["sessions"].add(sid)
+                return self.send(204, headers={"Set-Cookie":
+                                               f"t={sid}; Path=/; Max-Age={COOKIE_AGE}; SameSite=Strict; HttpOnly"})
+            STATE["fails"] += 1
+            if STATE["fails"] >= 5:
+                new_pin()  # too many guesses: old PIN is dead
+                return self.send(429, b"Too many attempts. Look at the new PIN on your PC.")
         self.send(403, b"Wrong PIN")
 
     def do_PUT(self):
@@ -369,13 +441,15 @@ def start(share, port=8000):
     inbox, outbox = os.path.join(share, "From phone"), os.path.join(share, "For phone")
     os.makedirs(inbox, exist_ok=True)
     os.makedirs(outbox, exist_ok=True)
-    archive = os.path.join(share, "Earlier sessions")  # leftovers are kept, just not shown
-    for folder in (inbox, outbox):
-        for n in os.listdir(folder):
-            p = os.path.join(folder, n)
-            if not n.startswith("."):
-                os.makedirs(archive, exist_ok=True)
-                shutil.move(p, unique_path(archive, n))
+    archive = os.path.join(share, "Earlier sessions")  # received files nobody saved are kept, just not shown
+    for n in os.listdir(inbox):
+        if not n.startswith("."):
+            os.makedirs(archive, exist_ok=True)
+            shutil.move(os.path.join(inbox, n), unique_path(archive, n))
+    for n in os.listdir(outbox):  # these are only copies of files that still exist elsewhere
+        p = os.path.join(outbox, n)
+        if not n.startswith("."):
+            shutil.rmtree(p) if os.path.isdir(p) and not os.path.islink(p) else os.remove(p)
     while True:
         try:
             httpd = ThreadingHTTPServer(("0.0.0.0", port), Handler)
@@ -386,7 +460,7 @@ def start(share, port=8000):
     hosts = {f"{h}:{port}" for h in (ip, "127.0.0.1", "localhost", "[::1]")}
     STATE["chat"] = []
     STATE.update(token=token, inbox=inbox, outbox=outbox, url=f"http://{ip}:{port}/?t={token}",
-                 seen={}, names={}, host=socket.gethostname(),
+                 seen={}, names={}, host=socket.gethostname(), qr=qr_matrix(f"http://{ip}:{port}/?t={token}"),
                  sessions=set(), hosts=hosts, origins={"http://" + h for h in hosts})
     new_pin()
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
