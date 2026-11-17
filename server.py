@@ -16,7 +16,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import qrcode
 
 HERE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
-STATE = {"chat": [], "pin": "", "fails": 0, "token": "", "inbox": "", "outbox": "", "url": "", "seen": {}, "names": {}, "host": ""}
+STATE = {"chat": [], "pin": "", "fails": 0, "token": "", "inbox": "", "outbox": "", "url": "", "seen": {}, "names": {}, "host": "",
+         "sessions": set(), "hosts": set(), "origins": set()}
 
 
 def local_ip():
@@ -86,12 +87,35 @@ def is_busy(folder):
     return any(n.endswith(".part") for n in os.listdir(folder))
 
 
+def reserve(folder, name):
+    """Claim a free file name in folder. Returns (final_path, fd of the open '<final_path>.part').
+
+    The .part file is created with O_EXCL, so two uploads of the same name can never share
+    one: the second gets 'name (1)'. The file only gets its final name when it is complete."""
+    base, ext = os.path.splitext(name)
+    n = 0
+    while True:
+        dest = os.path.join(folder, name if n == 0 else f"{base} ({n}){ext}")
+        if not os.path.exists(dest):
+            try:
+                fd = os.open(dest + ".part", os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o666)
+            except FileExistsError:
+                fd = None
+            if fd is not None:
+                if not os.path.exists(dest):  # re-check: a finished file may have taken the name meanwhile
+                    return dest, fd
+                os.close(fd)
+                os.remove(dest + ".part")
+        n += 1
+
+
 def copy_in(src, folder):
     """Copy src into folder without exposing a half-written file: write .part, then rename."""
-    dest = unique_path(folder, os.path.basename(src))
+    dest, fd = reserve(folder, os.path.basename(src))
     tmp = dest + ".part"
     try:
-        shutil.copyfile(src, tmp)
+        with os.fdopen(fd, "wb") as out, open(src, "rb") as s:
+            shutil.copyfileobj(s, out, 1 << 20)
         shutil.copymode(src, tmp)
         os.replace(tmp, dest)
     except BaseException:
@@ -152,8 +176,15 @@ class Handler(BaseHTTPRequestHandler):
         c = cookies.SimpleCookie(self.headers.get("Cookie", ""))
         return c[key].value if key in c else None
 
+    def host_ok(self):
+        """Block DNS rebinding (unknown Host) and cross-site writes (foreign Origin)."""
+        if self.headers.get("Host", "") not in STATE["hosts"]:
+            return False
+        origin = self.headers.get("Origin")
+        return self.command == "GET" or origin is None or origin in STATE["origins"]
+
     def authed(self):
-        ok = self.cookie("t") == STATE["token"]
+        ok = self.cookie("t") in STATE["sessions"]  # own login token, not the one in the QR link
         if ok:
             ip = self.client_address[0]
             STATE["seen"][ip] = time.time()  # last request from this phone
@@ -170,6 +201,8 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
         tok = urllib.parse.parse_qs(parsed.query).get("t", [""])[0]
+        if not self.host_ok():
+            return self.send(403, b"Forbidden")
 
         if path.startswith("/desktop"):
             if not self.is_local():
@@ -238,14 +271,30 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.send(404)
 
+    def content_length(self, required=False):
+        """Content-Length as a non-negative int. None if missing (or 0 when not required) or malformed."""
+        raw = self.headers.get("Content-Length")
+        if raw is None:
+            return None if required else 0
+        try:
+            n = int(raw)
+        except ValueError:
+            return None
+        return n if n >= 0 else None
+
     def chat_list(self, query):
-        since = int(urllib.parse.parse_qs(query).get("since", ["0"])[0] or 0)
+        try:
+            since = int(urllib.parse.parse_qs(query).get("since", ["0"])[0] or 0)
+        except ValueError:
+            return self.send(400, b"Bad request")
         return self.send(200, json.dumps([m for m in STATE["chat"] if m["id"] > since]).encode(),
                          "application/json")
 
     def chat_add(self, sender, name):
-        n = min(int(self.headers.get("Content-Length", 0)), 30000)
-        text = self.rfile.read(n).decode("utf-8", "replace").rstrip()[:5000]
+        n = self.content_length()
+        if n is None:
+            return self.send(400, b"Bad request")
+        text = self.rfile.read(min(n, 30000)).decode("utf-8", "replace").rstrip()[:5000]
         if not text:
             return self.send(400, b"Empty")
         with CHAT_LOCK:
@@ -255,19 +304,26 @@ class Handler(BaseHTTPRequestHandler):
         self.send(204)
 
     def do_POST(self):
+        if not self.host_ok():
+            return self.send(403, b"Forbidden")
         if self.path == "/chat":
             return self.chat_add("phone", STATE["names"].get(self.client_address[0], "Phone")) if self.authed() else self.send(401, b"scan")
         if self.path == "/desktop/chat":
             return self.chat_add("pc", STATE["host"] or "PC") if self.is_local() else self.send(403)
         if self.path != "/pair":
             return self.send(404)
-        n = min(int(self.headers.get("Content-Length", 0)), 64)
-        pin = self.rfile.read(n).decode().strip()
+        n = self.content_length()
+        if n is None:
+            return self.send(400, b"Bad request")
+        pin = self.rfile.read(min(n, 64)).decode("utf-8", "replace").strip()
         if self.cookie("q") != STATE["token"]:
             return self.send(401, b"Scan the QR code first")
         if secrets.compare_digest(pin.encode(), STATE["pin"].encode()):
             new_pin()  # a PIN works once
-            return self.send(204, headers={"Set-Cookie": f"t={STATE['token']}; Path=/; Max-Age={COOKIE_AGE}; SameSite=Strict"})
+            sid = secrets.token_urlsafe(32)  # this phone's own login token, never the one in the QR link
+            STATE["sessions"].add(sid)
+            return self.send(204, headers={"Set-Cookie":
+                                           f"t={sid}; Path=/; Max-Age={COOKIE_AGE}; SameSite=Strict; HttpOnly"})
         STATE["fails"] += 1
         if STATE["fails"] >= 5:
             new_pin()  # too many guesses: old PIN is dead
@@ -275,6 +331,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send(403, b"Wrong PIN")
 
     def do_PUT(self):
+        if not self.host_ok():
+            return self.send(403, b"Forbidden")
         if not self.authed():
             return self.send(401, b"Scan the QR code on your PC")
         up = urllib.parse.urlparse(self.path)
@@ -282,16 +340,23 @@ class Handler(BaseHTTPRequestHandler):
         if not name:
             return self.send(400, b"Bad name")
         folder = urllib.parse.parse_qs(up.query).get("folder", [""])[0]
-        remaining = int(self.headers.get("Content-Length", 0))
-        dest = unique_path(target_dir(STATE["inbox"], folder), name)
+        remaining = self.content_length(required=True)
+        if remaining is None:
+            return self.send(411, b"Content-Length required")
+        dest, fd = reserve(target_dir(STATE["inbox"], folder), name)
         tmp = dest + ".part"
-        with open(tmp, "wb") as f:
-            while remaining > 0:
-                chunk = self.rfile.read(min(1 << 20, remaining))
-                if not chunk:
-                    break
-                f.write(chunk)
-                remaining -= len(chunk)
+        try:
+            with os.fdopen(fd, "wb") as f:
+                while remaining > 0:
+                    chunk = self.rfile.read(min(1 << 20, remaining))
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    remaining -= len(chunk)
+        except BaseException:  # connection dropped / disk full: don't leave a stuck .part behind
+            if os.path.exists(tmp):
+                os.remove(tmp)
+            raise
         if remaining:
             os.remove(tmp)
             return self.send(400, b"Incomplete upload")
@@ -317,10 +382,12 @@ def start(share, port=8000):
             break
         except OSError:
             port += 1
-    token = secrets.token_urlsafe(8)
+    token, ip = secrets.token_urlsafe(8), local_ip()
+    hosts = {f"{h}:{port}" for h in (ip, "127.0.0.1", "localhost", "[::1]")}
     STATE["chat"] = []
-    STATE.update(token=token, inbox=inbox, outbox=outbox,
-                 url=f"http://{local_ip()}:{port}/?t={token}", seen={}, names={}, host=socket.gethostname())
+    STATE.update(token=token, inbox=inbox, outbox=outbox, url=f"http://{ip}:{port}/?t={token}",
+                 seen={}, names={}, host=socket.gethostname(),
+                 sessions=set(), hosts=hosts, origins={"http://" + h for h in hosts})
     new_pin()
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     return httpd, port
