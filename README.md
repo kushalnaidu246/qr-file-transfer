@@ -78,6 +78,15 @@ The app appears at `dist/FileDrop.app`. It is unsigned, so the first time you op
 | `desktop.html` | The page shown inside the desktop window |
 | `index.html` | The page the phone opens |
 | `requirements.txt` | Python packages |
+| `tests/test_server.py` | Automated tests for the server |
+
+## Run the tests
+
+The tests start the real server on a free port and need only `qrcode` (no window, no phone):
+
+```bash
+python3 -m unittest discover -s tests -v
+```
 
 ## Troubleshooting
 
