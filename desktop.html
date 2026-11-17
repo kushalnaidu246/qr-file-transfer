@@ -58,6 +58,7 @@
            transition:transform .1s, opacity .15s; }
   button:active { transform:scale(.96); }
   .primary { color:#fff; background:linear-gradient(135deg,var(--a1),var(--a2)); box-shadow:0 6px 14px rgba(99,102,241,.35); }
+  .primary:disabled { opacity:.55; cursor:default; box-shadow:none; }
   .ghost { background:transparent; color:var(--muted); padding:8px 10px; }
   .ghost:hover { color:var(--danger); }
   .wide { width:100%; padding:13px; font-size:15px; }
@@ -227,7 +228,11 @@ function drawQR(m) {
 }
 
 let showQR = false, qrDrawn = false, known = null, fresh = new Set();
-async function save(name, folder) { if (api()) { await api().save(name, folder || null); tick(); } else alert("Open the FileDrop app to save files."); }
+async function save(name, folder) {
+  if (!api()) return alert("Open the FileDrop app to save files.");
+  if (await api().save(name, folder || null) === "busy") alert("Your phone is still sending files into this folder. Save it when they have all arrived.");
+  tick();
+}
 const items = t => [...t.folders.map(f => ({ ...f, dir: true })), ...t.files];
 const keyOf = it => (it.files ? "d:" : "f:") + it.name;
 
@@ -273,8 +278,10 @@ async function tick() {
   if (!inItems.length) ib.innerHTML = '<div class="empty">Files you send from your phone appear here</div>';
   inItems.forEach(it => {
     const dir = !!it.files;
+    const sv = btn(it.busy ? "Receiving…" : dir ? "Save folder…" : "Save to…", "primary", () => dir ? save(null, it.name) : save(it.name));
+    sv.disabled = !!it.busy;
     ib.append(row(it, [
-      btn(dir ? "Save folder…" : "Save to…", "primary", () => dir ? save(null, it.name) : save(it.name)),
+      sv,
       btn("✕", "ghost", async () => { if (api()) { await (dir ? api().discard(null, it.name) : api().discard(it.name)); tick(); } })],
       fresh.has(keyOf(it)), keyOf(it)));
   });

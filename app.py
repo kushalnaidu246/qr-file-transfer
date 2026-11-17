@@ -41,6 +41,8 @@ class Api:
             src = self._src("", folder)
             if not os.path.isdir(src):
                 return False
+            if server.is_busy(src):
+                return "busy"  # phone is still sending into this folder
             chosen = win.create_file_dialog(webview.FOLDER_DIALOG, directory=self.last_dir)
             if not chosen:
                 return False
@@ -51,7 +53,10 @@ class Api:
             for f in os.listdir(src):
                 if not f.endswith(".part"):
                     shutil.move(os.path.join(src, f), server.unique_path(dest, f))
-            shutil.rmtree(src, ignore_errors=True)
+            try:
+                os.rmdir(src)  # only if empty: never delete a file that is still arriving
+            except OSError:
+                pass
             return True
         src = self._src(name)
         if not os.path.isfile(src):
