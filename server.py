@@ -436,6 +436,13 @@ class Handler(BaseHTTPRequestHandler):
         self.send(201, os.path.basename(dest).encode())
 
 
+class Server(ThreadingHTTPServer):
+    # The default backlog of 5 makes macOS reset extra connections when several arrive at once
+    # (e.g. the phone uploading many files in parallel), so allow a bigger queue.
+    request_queue_size = 64
+    daemon_threads = True
+
+
 def start(share, port=8000):
     """Start the server in a background thread; returns (httpd, port)."""
     inbox, outbox = os.path.join(share, "From phone"), os.path.join(share, "For phone")
@@ -452,7 +459,7 @@ def start(share, port=8000):
             shutil.rmtree(p) if os.path.isdir(p) and not os.path.islink(p) else os.remove(p)
     while True:
         try:
-            httpd = ThreadingHTTPServer(("0.0.0.0", port), Handler)
+            httpd = Server(("0.0.0.0", port), Handler)
             break
         except OSError:
             port += 1
